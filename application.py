@@ -3,16 +3,68 @@ logger = logging.getLogger(__name__)
 
 class Application:
    ''' run a templated application in a subprocess providing hooks for monitoring '''
-   def __init__(self,name,cmd,args):
+   def __init__(self,name,items,default_keys):
 
-      # name of the application (string expected)
+      # app name
       self.name         = name
-      # command binary (string expected)
-      self.cmd          = cmd
-      # command line arguments (list of 2-value tuples expected)
-      self.args         = args
-      # place holder for process
-      self.process      = None
+
+      # extract configuration from items and default_keys:
+      self.extract_config(items,default_keys)
+
+      self.parse_config()
+
+
+   def extract_config(self,items,default_keys):
+      # extract the configuration information
+      self.config = {}
+      self.defaults = {}
+      for key,value in items:
+         # exclude DEFAULT keys
+         if key not in default_keys:
+            self.config.append((key,value))
+         else:
+            self.defaults.append((key,value))
+
+   def parse_config(self):
+
+      # defaults
+      self.binary            = ''
+      self.enabled           = False
+      self.athena_app        = False
+      self.use_container     = False
+      self.container         = None
+      self.container_cmd     = None
+      self.args              = []
+
+      logger.debug('parsing app %s items %s',self.name,self.config)
+      for key,value in self.config:
+         logger.debug(' app: %s   key: %s   value: %s',self.name,key,value)
+         if key.startswith(self.name):
+            
+            if key.endswith('_binary'):
+               logger.debug('binary: %s',value)
+               self.binary = value
+            elif key.endswith('_enabled'):
+               logger.debug('enabed: %s',value)
+               self.enabled = 'true' == value
+            elif key.endswith('_athena_app'):
+               logger.debug('athena: %s',value)
+               self.athena_app = 'true' == value
+            elif key.endswith('_use_container'):
+               logger.debug('use_container: %s',value)
+               self.use_container = value
+            elif key.endswith('_container'):
+               logger.debug('container: %s',value)
+               self.container = value
+            elif key.endswith('_container_cmd'):
+               logger.debug('container_cmd: %s',value)
+               self.container_cmd = value
+            else:
+               logger.error('app specific attribute not found, app="%s", key="%s", value="%s"',self.name,key,value)
+         else:
+            logger.debug('key: %s value: %s',key,value)
+            self.args.append((key,value))
+
 
 
    def start(self):
@@ -22,9 +74,10 @@ class Application:
 
       # parse args
       for key,value in self.args:
-         command += ' --{key} {value}'.format(key,value)
+         command += ' --{0} {1}'.format(key,value)
 
       # launch process
+      logger.info('launching command = "%s"',command)
       self.process = subprocess.Popen(command.split(),stdout=subprocess.PIPE,stderr=subprocess.PIPE)
 
 
@@ -49,10 +102,10 @@ class Application:
       self.process.send_signal(signal)
 
    def get_returncode(self):
-      self.process.returncode
+      return self.process.returncode
 
    def get_pid(self):
-      self.process.pid
+      return self.process.pid
 
 
 class AthenaApplication(Application):
@@ -93,6 +146,10 @@ mkdir poolcond
 export DBREL_LOCATION=$ATLAS_DB_AREA/DBRelease
 cp $DBREL_LOCATION/current/poolcond/*.xml poolcond
 export DATAPATH=$PWD:$DATAPATH
+
+# setup for Generate_tf.py
+export LHAPATH=/lus/theta-fs0/projects/AtlasADSP/machinelearning/bjet_prod/lhapdfsets/current:$LHAPATH
+export LHAPDF_DATA_PATH=/lus/theta-fs0/projects/AtlasADSP/machinelearning/bjet_prod/lhapdfsets/current:$LHAPDF_DATA_PATH
 
 
 echo [$SECONDS] PYTHON Version:       $(python --version)

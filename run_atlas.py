@@ -1,5 +1,9 @@
 #!/usr/bin/env python
-import os,sys,optparse,logging,ConfigParser
+import os,sys,optparse,logging
+if sys.version_info >= (3, 0, 0):
+   import configparser as ConfigParser
+else:
+   import ConfigParser
 from application import Application,AthenaApplication
 from mpi4py import MPI
 logger = logging.getLogger(__name__)
@@ -7,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 def main():
    ''' run the atlas workflow end-to-end '''
-   logging.basicConfig(level=logging.INFO,format='%(asctime)s %(levelname)s:%(name)s:%(message)s')
+   logging.basicConfig(level=logging.DEBUG,format='%(asctime)s %(levelname)s:' + ('%05d' % MPI.COMM_WORLD.Get_rank()) + ':%(name)s:%(message)s')
 
    parser = optparse.OptionParser(description='run the atlas workflow end-to-end')
    parser.add_option('-c','--config',dest='config',help='input config file in the ConfigParser format.')
@@ -20,7 +24,6 @@ def main():
    manditory_args = [
                      'config',
                      'workdir',
-                     'stagedir',
                   ]
 
    for man in manditory_args:
@@ -38,23 +41,35 @@ def main():
    # change to working directory
    os.chdir(options.workdir)
    logger.info('current working dir: %s',os.getcwd())
+   
+   logger.debug('config = %s',config)
 
+   for app_name in config:
+      items = config[app_name]
 
-   for app,items in config.iteritems():
+      enabled,binary,athena,args = parse_app_config(app_name,items)
 
-      enabled,binary,athena,args = parse_app_config(app,items)
+      logger.debug('app: %s',app_name)
+      logger.debug('binary: %s',binary)
+      logger.debug('athena: %s',athena)
+      logger.debug('args: %s',args)
 
       if enabled:
-         logger.info('running %s',app)
+         logger.info('running %s',app_name)
          logger.info('    binary:      %s',binary)
          logger.info('    athena:      %s',athena)
 
          if athena:
-            app = AthenaApplication()
+            app = AthenaApplication(app_name,binary,args)
          else:
-            app = Application(binary,args)
-
+            app = Application(app_name,binary,args)
+         
+         logger.debug('   starting app %s ',app_name)
          app.start()
+         
+         stdout,stderr = app.block_and_get_output()
+         logger.info('%s exited with code %s',app_name,app.get_returncode())
+         logger.info('stdout = %s\nstderr = %s',stdout,stderr)
 
 
 
@@ -66,32 +81,47 @@ def parse_app_config(app,items):
    enabled = False
    athena = False
    args = []
-
-   for value,key in items:
-      if value.startswith(app):
-         if 'binary' in value:
-            binary = key
-         elif 'enabled' in value:
-            enabled = 'true' == key
-         elif 'athena_app' in value:
-            athena = 'true' == key
+   app = app.lower()
+   logger.debug('parsing app %s items %s',app,items)
+   for key,value in items:
+      logger.debug(' app: %s   key: %s   value: %s',app,key,value)
+      if key.startswith(app):
+         
+         if ('%s_binary' % app) in key:
+            logger.debug('binary: %s',value)
+            binary = value
+         elif ('%s_enabled' % app) in key:
+            logger.debug('enabed: %s',value)
+            enabled = 'true' == value
+         elif ('%s_athena_app' % app) in key:
+            logger.debug('athena: %s',value)
+            athena = 'true' == value
          else:
-            args.append((value,key))
+            logger.error('app specific attribute not found, app="%s", key="%s", value="%s"',app,key,value)
+      else:
+         logger.debug('key: %s value: %s',key,value)
+         args.append((key,value))
 
    return enabled,binary,athena,args
 
 
 def get_config(options):
 
-   config = None
+   config = {}
    if MPI.COMM_WORLD.Get_rank() == 0:
       configfile = ConfigParser.ConfigParser()
-      configfile.readfp(open(options.config))
-
-      for section in config.sections():
-         config[section] = config.items(section)
-
-   MPI.COMM_WORLD.bcast(config,root=0)
+      logger.debug('reading config file: %s',options.config)
+      configfile.read(options.config)
+      
+      for section in configfile.sections():
+         config[section] = []
+         for key,value in configfile.items(section):
+            # exclude DEFAULT keys
+            if key not in configfile['DEFAULT'].keys():
+               config[section].append((key,value))
+   logger.debug('at bcast %s',config)
+   config = MPI.COMM_WORLD.bcast(config,root=0)
+   logger.debug('after bcast %s',config)
 
    return config
 
