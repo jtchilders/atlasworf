@@ -1,84 +1,48 @@
 import subprocess,logging,stat,os
 logger = logging.getLogger(__name__)
+from mpi4py import MPI
 
-class Application:
+class Application(object):
    ''' run a templated application in a subprocess providing hooks for monitoring '''
-   def __init__(self,name,items,default_keys):
+
+   def __init__(self,name,settings,args,defaults=None):
 
       # app name
       self.name         = name
 
-      # extract configuration from items and default_keys:
-      self.extract_config(items,default_keys)
-
-      self.parse_config()
-
-
-   def extract_config(self,items,default_keys):
-      # extract the configuration information
-      self.config = {}
-      self.defaults = {}
-      for key,value in items:
-         # exclude DEFAULT keys
-         if key not in default_keys:
-            self.config.append((key,value))
-         else:
-            self.defaults.append((key,value))
-
-   def parse_config(self):
-
-      # defaults
-      self.binary            = ''
-      self.enabled           = False
-      self.athena_app        = False
-      self.use_container     = False
-      self.container         = None
-      self.container_cmd     = None
-      self.args              = []
-
-      logger.debug('parsing app %s items %s',self.name,self.config)
-      for key,value in self.config:
-         logger.debug(' app: %s   key: %s   value: %s',self.name,key,value)
-         if key.startswith(self.name):
-            
-            if key.endswith('_binary'):
-               logger.debug('binary: %s',value)
-               self.binary = value
-            elif key.endswith('_enabled'):
-               logger.debug('enabed: %s',value)
-               self.enabled = 'true' == value
-            elif key.endswith('_athena_app'):
-               logger.debug('athena: %s',value)
-               self.athena_app = 'true' == value
-            elif key.endswith('_use_container'):
-               logger.debug('use_container: %s',value)
-               self.use_container = value
-            elif key.endswith('_container'):
-               logger.debug('container: %s',value)
-               self.container = value
-            elif key.endswith('_container_cmd'):
-               logger.debug('container_cmd: %s',value)
-               self.container_cmd = value
-            else:
-               logger.error('app specific attribute not found, app="%s", key="%s", value="%s"',self.name,key,value)
-         else:
-            logger.debug('key: %s value: %s',key,value)
-            self.args.append((key,value))
+      self.settings     = settings
+      self.args         = args
+      self.defaults     = defaults
 
 
+   def make_cmdline_arg_string(self):
+      # parse args
+      outargs = ''
+      for key in self.args:
+         value = self.args[key]
+         command += ' --{0} {1}'.format(key,value)
 
-   def start(self):
+      return outargs
+
+
+   def start(self,rundir=None):
 
       # create command
-      command = self.cmd
+      command = self.get_command()
 
-      # parse args
-      for key,value in self.args:
-         command += ' --{0} {1}'.format(key,value)
+      # add container command prefix
+      if self.settings['use_container'] in ['true','True','1','yes']:
+         command = self.settings['container_prefix_cmd'] + ' ' + command
 
       # launch process
       logger.info('launching command = "%s"',command)
-      self.process = subprocess.Popen(command.split(),stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+      self.process = subprocess.Popen(command.split(),stdout=subprocess.PIPE,stderr=subprocess.PIPE,cwd=rundir)
+
+   def get_command(self):
+      ''' may need to override this function '''
+      command = self.settings['command']
+      command += self.make_cmdline_arg_string()
+      return command
 
 
    def terminate_process(self):
@@ -161,39 +125,56 @@ echo [$SECONDS] Starting transformation
 {transformation} {jobPars}
 echo [$SECONDS] Transform exited with return code: $?
 echo [$SECONDS] Exiting
-"""
-
-
 '''
 
-   def __init__(self,name,cmd,args,
-                release,package,
-                cmtConfig,gcclocation,
-                ATLAS_LOCAL_ROOT_BASE='/cvmfs/atlas.cern.ch/repo/ATLASLocalRootBase',
-                output_script_name = 'runscript.sh'):
-      super(AthenaApplication,self).__init__(name,cmd,args)
+   def __init__(self,name,settings,args,defaults,rundir):
+      super(AthenaApplication,self).__init__(name,settings,args,defaults)
 
       # ensure user passed allowed application
-      if cmd not in ATHENA_CMDS:
-         raise Exception('Unsupported Athena Application: user specified %s which is not in %s',cmd,self.ATHENA_CMDS)
+      if settings['command'] not in self.ATHENA_CMDS:
+         raise Exception('Unsupported Athena Application: user specified %s which is not in %s',settings['command'],self.ATHENA_CMDS)
 
+      self.rundir = rundir
+
+
+   def get_command(self):
+      command = self.make_athena_script()
+      return command
+
+
+   def make_athena_script(self):
       # set custom variables in the script
-      script_content = athena_script_template.format(
-         ATLAS_LOCAL_ROOT_BASE = ATLAS_LOCAL_ROOT_BASE,
-         release = release,
-         package = package,
-         cmtConfig = cmtConfig,
-         gcclocation = gcclocation,
-         transformation = self.cmd,
-         jobPars = self.args)
+      script_content = self.athena_script_template.format(
+         ATLAS_LOCAL_ROOT_BASE = self.defaults['atlas_local_root_base'],
+         release = self.settings['release'],
+         package = self.settings['package'],
+         cmtConfig = self.settings['cmtConfig'],
+         gcclocation = self.settings['gcclocation'],
+         transformation = self.settings['command'],
+         jobPars = self.make_cmdline_arg_string())
 
-      # write script 
-      open(output_script_name,'w').write(script_content)
+      # write script
+      script_filename = os.path.join(self.rundir,self.settings['output_script_name'])
+      open(script_filename,'w').write(script_content)
       # set executable
-      os.chmod(output_script_name,stat.S_IRWXU | stat.S_IRWXG | stat.S_IXOTH | stat.S_IROTH)
+      os.chmod(script_filename,stat.S_IRWXU | stat.S_IRWXG | stat.S_IXOTH | stat.S_IROTH)
 
-      # set the command to be the script
-      self.cmd = output_script_name
-      self.args = []
+      return script_filename
+
       
+
+class GenerateTF(AthenaApplication):
+   ''' run a Generate_tf.py job '''
+
+   def __init__(self,name,settings,args,defaults,rundir):
+      super(GenerateTF,self).__init__(name,settings,args,defaults,rundir)
+
+      # determine event number starting counter
+      self.args['firstEvent'] = str(int(self.settings['event_counter_offset']) + MPI.COMM_WORLD.Get_rank() * int(self.defaults['events_per_rank']))
+
+
+def get_athena_app(name,settings,args,defaults,rundir):
+
+   if 'Generate_tf.py' in settings['command']:
+      return GenerateTF(name,settings,args,defaults,rundir)
 
