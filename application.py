@@ -1,6 +1,7 @@
 import subprocess,logging,stat,os
-logger = logging.getLogger(__name__)
 from mpi4py import MPI
+logger = logging.getLogger(__name__)
+
 
 class Application(object):
    ''' run a templated application in a subprocess providing hooks for monitoring '''
@@ -20,7 +21,7 @@ class Application(object):
       outargs = ''
       for key in self.args:
          value = self.args[key]
-         command += ' --{0} {1}'.format(key,value)
+         outargs += ' --{0} {1}'.format(key,value)
 
       return outargs
 
@@ -74,7 +75,7 @@ class Application(object):
 
 class AthenaApplication(Application):
    ''' run an athena-based application in a subprocess, setting up ALRB and release '''
-   ATHENA_CMDS=['athena','Generate_tf.py','Sim_tf.py','Reco_tf.py']
+   ATHENA_CMDS = ['athena','Generate_tf.py','Sim_tf.py','Reco_tf.py']
 
    athena_script_template = '''#!/bin/bash
 echo [$SECONDS] Start inside Singularity
