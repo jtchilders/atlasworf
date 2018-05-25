@@ -32,12 +32,14 @@ class Application(object):
       command = self.get_command()
 
       # add container command prefix
-      if self.settings['use_container'] in ['true','True','1','yes']:
+      if 'use_container' in self.settings and self.settings['use_container'] in ['true','True','1','yes']:
          command = self.settings['container_prefix_cmd'] + ' ' + command
 
       # launch process
       logger.info('launching command = "%s"',command)
-      self.process = subprocess.Popen(command.split(),stdout=subprocess.PIPE,stderr=subprocess.PIPE,cwd=rundir)
+      stdout_filename = os.path.join(rundir,self.name + '.stdout')
+      stderr_filename = os.path.join(rundir,self.name + '.stderr')
+      self.process = subprocess.Popen(command.split(),stdout=open(stdout_filename,'w'),stderr=open(stderr_filename,'w'),cwd=rundir)
 
    def get_command(self):
       ''' may need to override this function '''
@@ -60,8 +62,8 @@ class Application(object):
    def wait_on_process(self):
       self.process.wait()
 
-   def block_and_get_output(self,input=None):
-      return self.process.communicate(input)
+   # def block_and_get_output(self,input=None):
+   #   return self.process.communicate(input)
 
    def send_signal_to_process(self,signal):
       self.process.send_signal(signal)
@@ -82,10 +84,13 @@ echo [$SECONDS] Start inside Singularity
 echo [$SECONDS] DATE=$(date)
 WORKDIR=$1
 echo [$SECONDS] WORKDIR=$WORKDIR
+USE_MP={use_mp}
 
 cd $WORKDIR
 
-export ATHENA_PROC_NUMBER=128 # AthenaMP workers per node
+if [ "$USE_MP" = "TRUE" ] || [ "$USE_MP" = "true" ] || [ "$USE_MP" = "True" ]; then
+   export ATHENA_PROC_NUMBER={ATHENA_PROC_NUMBER}
+fi
 
 echo [$SECONDS] ATHENA_PROC_NUMBER:   $ATHENA_PROC_NUMBER
 
@@ -101,21 +106,32 @@ echo [$SECONDS] RELEASE=$RELEASE
 echo [$SECONDS] PACKAGE=$PACKAGE
 echo [$SECONDS] CMTCONFIG=$CMTCONFIG
 
-source $AtlasSetup/scripts/asetup.sh $RELEASE,$PACKAGE --cmtconfig=$CMTCONFIG --makeflags=\"$MAKEFLAGS\" --cmtextratags=ATLAS,useDBRelease {gcclocation}
+source $AtlasSetup/scripts/asetup.sh $RELEASE,$PACKAGE,here,notest --cmtconfig=$CMTCONFIG --makeflags=\"$MAKEFLAGS\" --cmtextratags=ATLAS,useDBRelease {gcclocation}
 
-DBBASEPATH=$ATLAS_DB_AREA/DBRelease/current
-export CORAL_DBLOOKUP_PATH=$DBBASEPATH/XMLConfig
-export CORAL_AUTH_PATH=$DBBASEPATH/XMLConfig
-export DATAPATH=$DBBASEPATH:$DATAPATH
-mkdir poolcond
-export DBREL_LOCATION=$ATLAS_DB_AREA/DBRelease
-cp $DBREL_LOCATION/current/poolcond/*.xml poolcond
-export DATAPATH=$PWD:$DATAPATH
+if [ "{transformation}" = "Sim_tf.py" ]; then
+   echo [$SECONDS] Setting up database for local copy: ATLAS_DB_AREA=$ATLAS_DB_AREA
+   DBBASEPATH=$ATLAS_DB_AREA/DBRelease/current
+   export CORAL_DBLOOKUP_PATH=$DBBASEPATH/XMLConfig
+   export CORAL_AUTH_PATH=$DBBASEPATH/XMLConfig
+   export DATAPATH=$DBBASEPATH:$DATAPATH
+   #mkdir poolcond
+   #export DBREL_LOCATION=$ATLAS_DB_AREA/DBRelease
+   #cp $DBREL_LOCATION/current/poolcond/*.xml poolcond
+   #export DATAPATH=$PWD:$DATAPATH
+fi
+
+echo [$SECONDS] Setting up Frontier
+export http_proxy=http://10.236.1.194:3128
+export HTTP_PROXY=http://10.236.1.194:3128
+export FRONTIER_SERVER=$FRONTIER_SERVER\(proxyurl=$HTTP_PROXY\)
+export FRONTIER_LOG_LEVEL=info
 
 # setup for Generate_tf.py
-export LHAPATH=/lus/theta-fs0/projects/AtlasADSP/machinelearning/bjet_prod/lhapdfsets/current:$LHAPATH
-export LHAPDF_DATA_PATH=/lus/theta-fs0/projects/AtlasADSP/machinelearning/bjet_prod/lhapdfsets/current:$LHAPDF_DATA_PATH
-
+if [ "{transformation}" = "Generate_tf.py" ]; then
+   echo [$SECONDS] setting up LHAPDF
+   export LHAPATH=/lus/theta-fs0/projects/AtlasADSP/machinelearning/bjet_prod/lhapdfsets/current:$LHAPATH
+   export LHAPDF_DATA_PATH=/lus/theta-fs0/projects/AtlasADSP/machinelearning/bjet_prod/lhapdfsets/current:$LHAPDF_DATA_PATH
+fi
 
 echo [$SECONDS] PYTHON Version:       $(python --version)
 echo [$SECONDS] PYTHONPATH:           $PYTHONPATH
@@ -139,7 +155,7 @@ echo [$SECONDS] Exiting
 
 
    def get_command(self):
-      command = self.make_athena_script()
+      command = self.make_athena_script() + ' ' + self.rundir
       return command
 
 
@@ -151,6 +167,8 @@ echo [$SECONDS] Exiting
          package = self.settings['package'],
          cmtConfig = self.settings['cmtConfig'],
          gcclocation = self.settings['gcclocation'],
+         use_mp = self.settings['use_mp'],
+         ATHENA_PROC_NUMBER = self.defaults['athena_proc_number'],
          transformation = self.settings['command'],
          jobPars = self.make_cmdline_arg_string())
 
@@ -162,7 +180,19 @@ echo [$SECONDS] Exiting
 
       return script_filename
 
-      
+
+class LHEGun(Application):
+   ''' run lhe_gun.py '''
+   def __init__(self,name,settings,args,defaults):
+      super(LHEGun,self).__init__(name,settings,args,defaults)
+
+      self.output_filename = ('lhe_%05d' % MPI.COMM_WORLD.Get_rank()) + '.lhe'
+      self.args['outfile-base'] = 'lhe_%05d' % MPI.COMM_WORLD.Get_rank()
+      self.args['numpy-seed'] = int(self.settings['numpy_seed_offset']) + MPI.COMM_WORLD.Get_rank()
+
+   def get_output_filename(self):
+      return self.output_filename
+
 
 class GenerateTF(AthenaApplication):
    ''' run a Generate_tf.py job '''
@@ -173,9 +203,57 @@ class GenerateTF(AthenaApplication):
       # determine event number starting counter
       self.args['firstEvent'] = str(int(self.settings['event_counter_offset']) + MPI.COMM_WORLD.Get_rank() * int(self.defaults['events_per_rank']))
 
+      self.args['outputEVNTFile'] = 'genEVNT_%05d.pool.root' % MPI.COMM_WORLD.Get_rank()
 
-def get_athena_app(name,settings,args,defaults,rundir):
+   def get_output_filename(self):
+      return self.args['outputEVNTFile']
 
-   if 'Generate_tf.py' in settings['command']:
+   def set_input_filename(self,input_filename):
+      # set input file name
+      self.args['preExec'] = self.args['preExec'].format(input_filename=input_filename)
+
+
+class SimulateTF(AthenaApplication):
+   ''' run Sim_tf.py job '''
+   def __init__(self,name,settings,args,defaults,rundir):
+      super(SimulateTF,self).__init__(name,settings,args,defaults,rundir)
+
+      # determine event number starting counter
+      self.args['outputHITSFile'] = 'simHITS_%05d.pool.root' % MPI.COMM_WORLD.Get_rank()
+
+   def get_output_filename(self):
+      return self.args['outputHITSFile']
+
+   def set_input_filename(self,input_filename):
+      # set input file name
+      self.args['inputEVNTFile'] = input_filename
+
+
+class ReconstructTF(AthenaApplication):
+   ''' run Sim_tf.py job '''
+   def __init__(self,name,settings,args,defaults,rundir):
+      super(ReconstructTF,self).__init__(name,settings,args,defaults,rundir)
+
+      # determine event number starting counter
+      self.args['outputRDOFile'] = 'recoRDO_%05d.pool.root' % MPI.COMM_WORLD.Get_rank()
+      self.args['outputESDFile'] = 'recoESD_%05d.pool.root' % MPI.COMM_WORLD.Get_rank()
+
+   def get_output_filename(self):
+      return self.args['outputRDOFile'],self.args['outputESDFile']
+
+   def set_input_filename(self,input_filename):
+      # set input file name
+      self.args['inputHITSFile'] = input_filename
+
+
+def get_app(name,settings,args,defaults,rundir):
+
+   if 'lhe' in settings['command']:
+      return LHEGun(name,settings,args,defaults)
+   elif 'Generate_tf.py' in settings['command']:
       return GenerateTF(name,settings,args,defaults,rundir)
+   elif 'Sim_tf.py' in settings['command']:
+      return SimulateTF(name,settings,args,defaults,rundir)
+   elif 'Reco_tf.py' in settings['command']:
+      return ReconstructTF(name,settings,args,defaults,rundir)
 

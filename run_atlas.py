@@ -56,13 +56,15 @@ def main():
 
    logger.info('executing workflow: %s',defaults['workflow'])
 
+   input_filename = None
+
    for app_name in defaults['workflow'].split(','):
       settings = config[app_name + '_settings']
       args     = config[app_name + '_args']
 
       # directory in rank directory to run application
       # example: worfrank_00000/lhegun/
-      rank_subdir_appdir = os.path.join(rank_subdir,app_name)
+      rank_subdir_appdir = os.path.realpath(os.path.join(rank_subdir,app_name))
       os.mkdir(rank_subdir_appdir)
 
       logger.debug('app: %s',app_name)
@@ -73,17 +75,19 @@ def main():
          logger.info('    command:      %s',settings['command'])
          logger.info('    athena_app:   %s',settings['athena_app'])
 
-         if settings['command'] in apps.AthenaApplication.ATHENA_CMDS:
-            app = apps.get_athena_app(app_name,settings,args,defaults,rank_subdir_appdir)
-         else:
-            app = apps.Application(app_name,settings,args,defaults)
+         app = apps.get_app(app_name,settings,args,defaults,rank_subdir_appdir)
+
+         if input_filename is not None:
+            app.set_input_filename(input_filename)
          
          logger.debug('   starting app %s ',app_name)
-         #app.start()
+         app.start(rank_subdir_appdir)
          
-         #stdout,stderr = app.block_and_get_output()
-         #logger.info('%s exited with code %s',app_name,app.get_returncode())
+         app.wait_on_process()
+         logger.info('%s exited with code %s',app_name,app.get_returncode())
          #logger.info('stdout = %s\nstderr = %s',stdout,stderr)
+
+         input_filename = os.path.join(rank_subdir_appdir,app.get_output_filename())
 
 
 def get_config(options):
@@ -92,6 +96,8 @@ def get_config(options):
    default = {}
    if MPI.COMM_WORLD.Get_rank() == 0:
       configfile = ConfigParser.ConfigParser()
+      # make config options case sensitive (insensitive by default)
+      configfile.optionxform = str
       logger.debug('reading config file: %s',options.config)
       with open(options.config) as fp:
          configfile.readfp(fp)
