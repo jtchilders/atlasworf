@@ -1,4 +1,4 @@
-import subprocess,logging,stat,os
+import subprocess,logging,stat,os,shutil,glob,tarfile
 from mpi4py import MPI
 logger = logging.getLogger(__name__)
 
@@ -6,15 +6,20 @@ logger = logging.getLogger(__name__)
 class Application(object):
    ''' run a templated application in a subprocess providing hooks for monitoring '''
 
-   def __init__(self,name,settings,args,defaults=None):
+   def __init__(self,name,settings,args,defaults=None,rundir=None):
 
       # app name
       self.name         = name
+
+      self.rundir       = rundir
 
       self.settings     = settings
       self.args         = args
       self.defaults     = defaults
 
+
+   def get_rundir(self):
+      return self.rundir
 
    def make_cmdline_arg_string(self):
       # parse args
@@ -25,8 +30,13 @@ class Application(object):
 
       return outargs
 
+   def stage_files(self,stagedir):
+      shutil.copy(self.stdout_filename,stagedir)
+      shutil.copy(self.stderr_filename,stagedir)
 
-   def start(self,rundir=None):
+
+
+   def start(self):
 
       # create command
       command = self.get_command()
@@ -37,9 +47,14 @@ class Application(object):
 
       # launch process
       logger.info('launching command = "%s"',command)
-      stdout_filename = os.path.join(rundir,self.name + '.stdout')
-      stderr_filename = os.path.join(rundir,self.name + '.stderr')
-      self.process = subprocess.Popen(command.split(),stdout=open(stdout_filename,'w'),stderr=open(stderr_filename,'w'),cwd=rundir)
+      self.stdout_filename = ('%05d_%s.stdout' % (MPI.COMM_WORLD.Get_rank(),self.name))
+      self.stderr_filename = ('%05d_%s.stderr' % (MPI.COMM_WORLD.Get_rank(),self.name))
+      if self.rundir is not None:
+         self.stdout_filename = os.path.join(self.rundir,self.stdout_filename)
+         self.stderr_filename = os.path.join(self.rundir,self.stderr_filename)
+      
+      self.process = subprocess.Popen(command.split(),stdout=open(self.stdout_filename,'w'),
+                                      stderr=open(self.stderr_filename,'w'),cwd=self.rundir)
 
    def get_command(self):
       ''' may need to override this function '''
@@ -118,6 +133,9 @@ if [ "{transformation}" = "Sim_tf.py" ]; then
    #export DBREL_LOCATION=$ATLAS_DB_AREA/DBRelease
    #cp $DBREL_LOCATION/current/poolcond/*.xml poolcond
    #export DATAPATH=$PWD:$DATAPATH
+
+   # tell transform to skip file validation
+   export G4ATLAS_SKIPFILEPEEK=1
 fi
 
 echo [$SECONDS] Setting up Frontier
@@ -145,19 +163,15 @@ echo [$SECONDS] Exiting
 '''
 
    def __init__(self,name,settings,args,defaults,rundir):
-      super(AthenaApplication,self).__init__(name,settings,args,defaults)
+      super(AthenaApplication,self).__init__(name,settings,args,defaults,rundir)
 
       # ensure user passed allowed application
       if settings['command'] not in self.ATHENA_CMDS:
          raise Exception('Unsupported Athena Application: user specified %s which is not in %s',settings['command'],self.ATHENA_CMDS)
 
-      self.rundir = rundir
-
-
    def get_command(self):
       command = self.make_athena_script() + ' ' + self.rundir
       return command
-
 
    def make_athena_script(self):
       # set custom variables in the script
@@ -172,8 +186,12 @@ echo [$SECONDS] Exiting
          transformation = self.settings['command'],
          jobPars = self.make_cmdline_arg_string())
 
+      logger.debug('run script content: \n%s',script_content)
+
       # write script
-      script_filename = os.path.join(self.rundir,self.settings['output_script_name'])
+      script_filename = self.settings['output_script_name']
+      if self.rundir is not None:
+         script_filename = os.path.join(self.rundir,script_filename)
       open(script_filename,'w').write(script_content)
       # set executable
       os.chmod(script_filename,stat.S_IRWXU | stat.S_IRWXG | stat.S_IXOTH | stat.S_IROTH)
@@ -183,11 +201,11 @@ echo [$SECONDS] Exiting
 
 class LHEGun(Application):
    ''' run lhe_gun.py '''
-   def __init__(self,name,settings,args,defaults):
-      super(LHEGun,self).__init__(name,settings,args,defaults)
+   def __init__(self,name,settings,args,defaults,rundir):
+      super(LHEGun,self).__init__(name,settings,args,defaults,rundir)
 
-      self.output_filename = ('lhe_%05d' % MPI.COMM_WORLD.Get_rank()) + '.lhe'
-      self.args['outfile-base'] = 'lhe_%05d' % MPI.COMM_WORLD.Get_rank()
+      self.output_filename = ('%05d_lhe' % MPI.COMM_WORLD.Get_rank()) + '.lhe'
+      self.args['outfile-base'] = '%05d_lhe' % MPI.COMM_WORLD.Get_rank()
       self.args['numpy-seed'] = int(self.settings['numpy_seed_offset']) + MPI.COMM_WORLD.Get_rank()
 
    def get_output_filename(self):
@@ -203,7 +221,17 @@ class GenerateTF(AthenaApplication):
       # determine event number starting counter
       self.args['firstEvent'] = str(int(self.settings['event_counter_offset']) + MPI.COMM_WORLD.Get_rank() * int(self.defaults['events_per_rank']))
 
-      self.args['outputEVNTFile'] = 'genEVNT_%05d.pool.root' % MPI.COMM_WORLD.Get_rank()
+      self.args['outputEVNTFile'] = '%05d_genEVNT.pool.root' % MPI.COMM_WORLD.Get_rank()
+      # self.files_to_stage.append(self.args['outputEVNTFile'])
+
+   def stage_files(self,stagedir):
+      super(GenerateTF,self).stage_files(stagedir)
+      srcfile = 'log.generate'
+      dstfile = os.path.join(stagedir,('%05d_' % MPI.COMM_WORLD.Get_rank()) + srcfile)
+      if self.rundir is not None:
+         srcfile = os.path.join(self.rundir,srcfile)
+
+      shutil.copyfile(srcfile,dstfile)
 
    def get_output_filename(self):
       return self.args['outputEVNTFile']
@@ -219,7 +247,36 @@ class SimulateTF(AthenaApplication):
       super(SimulateTF,self).__init__(name,settings,args,defaults,rundir)
 
       # determine event number starting counter
-      self.args['outputHITSFile'] = 'simHITS_%05d.pool.root' % MPI.COMM_WORLD.Get_rank()
+      self.args['outputHITSFile'] = '%05d_simHITS.pool.root' % MPI.COMM_WORLD.Get_rank()
+
+
+   def stage_files(self,stagedir):
+      super(SimulateTF,self).stage_files(stagedir)
+      srcfile = 'log.EVNTtoHITS'
+      dstfile = os.path.join(stagedir,('%05d_' % MPI.COMM_WORLD.Get_rank()) + srcfile)
+
+      if self.rundir is not None:
+         srcfile = os.path.join(self.rundir,srcfile)
+
+      shutil.copyfile(srcfile,dstfile)
+
+      athena_log_glob = 'athenaMP-workers*/*/AthenaMP.log'
+      if self.rundir is not None:
+         athena_log_glob = os.path.join(self.rundir,athena_log_glob)
+
+      logs = glob.glob(athena_log_glob)
+
+      # cat files
+      tarfilename = '%05d_simulate_workers.tar' % MPI.COMM_WORLD.Get_rank()
+      dstfile = os.path.join(stagedir,tarfilename)
+      if self.rundir is not None:
+         tarfilename = os.path.join(self.rundir,tarfilename)
+      tf = tarfile.open(tarfilename,'w')
+      for log in logs:
+         tf.add(log)
+      tf.close()
+      # now copy tar to stagedir
+      shutil.copyfile(tarfilename,dstfile)
 
    def get_output_filename(self):
       return self.args['outputHITSFile']
@@ -235,21 +292,42 @@ class ReconstructTF(AthenaApplication):
       super(ReconstructTF,self).__init__(name,settings,args,defaults,rundir)
 
       # determine event number starting counter
-      self.args['outputRDOFile'] = 'recoRDO_%05d.pool.root' % MPI.COMM_WORLD.Get_rank()
-      self.args['outputESDFile'] = 'recoESD_%05d.pool.root' % MPI.COMM_WORLD.Get_rank()
+      self.args['outputRDOFile'] = '%05d_recoRDO.pool.root' % MPI.COMM_WORLD.Get_rank()
+      self.args['outputESDFile'] = '%05d_recoESD.pool.root' % MPI.COMM_WORLD.Get_rank()
+
+   def stage_files(self,stagedir):
+      super(ReconstructTF,self).stage_files(stagedir)
+      srcfiles = [self.args['outputRDOFile'],self.args['outputESDFile']]
+      for srcfile in srcfiles:
+         dstfile = os.path.join(stagedir,('%05d_' % MPI.COMM_WORLD.Get_rank()) + srcfile)
+         
+         if self.rundir is not None:
+            srcfile = os.path.join(self.rundir,srcfile)
+
+         shutil.copyfile(srcfile,dstfile)
+
 
    def get_output_filename(self):
-      return self.args['outputRDOFile'],self.args['outputESDFile']
+      return None
+
+   def get_output_rdo_filename(self):
+      return self.args['outputRDOFile']
+
+   def get_output_esd_filename(self):
+      return self.args['outputESDFile']
 
    def set_input_filename(self,input_filename):
       # set input file name
       self.args['inputHITSFile'] = input_filename
 
+   # def get_files_to_stage(self):
+   #   return [self.args['outputESDFile'],self.args['outputRDOFile']]
+
 
 def get_app(name,settings,args,defaults,rundir):
 
    if 'lhe' in settings['command']:
-      return LHEGun(name,settings,args,defaults)
+      return LHEGun(name,settings,args,defaults,rundir)
    elif 'Generate_tf.py' in settings['command']:
       return GenerateTF(name,settings,args,defaults,rundir)
    elif 'Sim_tf.py' in settings['command']:
