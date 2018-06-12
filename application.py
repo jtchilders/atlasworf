@@ -129,20 +129,21 @@ if [ "{transformation}" = "Sim_tf.py" ]; then
    export CORAL_DBLOOKUP_PATH=$DBBASEPATH/XMLConfig
    export CORAL_AUTH_PATH=$DBBASEPATH/XMLConfig
    export DATAPATH=$DBBASEPATH:$DATAPATH
-   #mkdir poolcond
-   #export DBREL_LOCATION=$ATLAS_DB_AREA/DBRelease
-   #cp $DBREL_LOCATION/current/poolcond/*.xml poolcond
-   #export DATAPATH=$PWD:$DATAPATH
+   mkdir poolcond
+   export DBREL_LOCATION=$ATLAS_DB_AREA/DBRelease
+   cp $DBREL_LOCATION/current/poolcond/*.xml poolcond
+   export DATAPATH=$PWD:$DATAPATH
+   unset FRONTIER_SERVER
 
    # tell transform to skip file validation
    export G4ATLAS_SKIPFILEPEEK=1
+else
+   echo [$SECONDS] Setting up Frontier
+   export http_proxy=http://10.236.1.194:3128
+   export HTTP_PROXY=http://10.236.1.194:3128
+   export FRONTIER_SERVER=$FRONTIER_SERVER\(proxyurl=$HTTP_PROXY\)
+   export FRONTIER_LOG_LEVEL=info
 fi
-
-echo [$SECONDS] Setting up Frontier
-export http_proxy=http://10.236.1.194:3128
-export HTTP_PROXY=http://10.236.1.194:3128
-export FRONTIER_SERVER=$FRONTIER_SERVER\(proxyurl=$HTTP_PROXY\)
-export FRONTIER_LOG_LEVEL=info
 
 # setup for Generate_tf.py
 if [ "{transformation}" = "Generate_tf.py" ]; then
@@ -158,8 +159,10 @@ env | sort > env_dump.txt
 
 echo [$SECONDS] Starting transformation
 {transformation} {jobPars}
-echo [$SECONDS] Transform exited with return code: $?
+EXIT_CODE=$?
+echo [$SECONDS] Transform exited with return code: $EXIT_CODE
 echo [$SECONDS] Exiting
+exit $EXIT_CODE
 '''
 
    def __init__(self,name,settings,args,defaults,rundir):
