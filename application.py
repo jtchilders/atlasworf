@@ -300,7 +300,39 @@ class ReconstructTF(AthenaApplication):
 
    def stage_files(self,stagedir):
       super(ReconstructTF,self).stage_files(stagedir)
+      
       srcfiles = [self.args['outputRDOFile'],self.args['outputESDFile']]
+      # if this setting is set, the merge steps will be skipped so
+      # we must copy out one output file per AthenaMP worker
+      if 'athenaMPMergeTargetSize' in self.args:
+         logger.info('handling non-merged outputs')
+         srcfiles = []
+         # glob all the RDO files
+         glob_str = os.path.join(self.rundir,'*/*/'+self.args['outputRDOFile'] + '*')
+         srcfiles += glob.glob(glob_str)
+         # glob all the ESD files
+         glob_str = os.path.join(self.rundir,'*/*/'+self.args['outputESDFile'] + '*')
+         srcfiles += glob.glob(glob_str)
+         # what I've seen is that all the filenames are the same down inside the
+         # worker directories so we cannot just copy them to the stage out directory
+         # we have to rename them to include the worker number for uniqueness
+         # we'll rename them in the run directory because if this is a node-local SSD
+         # or RAM-disk, performance will be better.
+         newsrcfiles = []
+         for filename in srcfiles:
+            newfn = os.path.basename(filename) + '.' + self.get_worker_num(filename)
+            newfn = os.path.join(os.path.dirname(filename),newfn)
+
+            os.rename(filename,newfn)
+
+            newsrcfiles.append(newfn)
+
+         srcfiles = newsrcfiles
+         logger.info('%s files renamed',len(srcfiles))
+
+
+         
+      logger.info('staging reco output files')
       for srcfile in srcfiles:
          dstfile = os.path.join(stagedir,('%05d_' % MPI.COMM_WORLD.Get_rank()) + srcfile)
          
@@ -322,6 +354,12 @@ class ReconstructTF(AthenaApplication):
    def set_input_filename(self,input_filename):
       # set input file name
       self.args['inputHITSFile'] = input_filename
+
+   def get_worker_num(self,filename):
+      start = filename.find('worker_') + len('worker_')
+      end = filename.find('/',start)
+      return ('%05d' % int(filename[start:end]))
+
 
    # def get_files_to_stage(self):
    #   return [self.args['outputESDFile'],self.args['outputRDOFile']]
