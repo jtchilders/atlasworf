@@ -53,7 +53,7 @@ def main():
    logger.info('running on hostname:   %s',socket.gethostname())
    
    stagedir = options.stagedir
-   workdir  = options.workdir
+   #workdir  = options.workdir
    config,defaults = get_config(options)
 
    # startupdir = os.getcwd()
@@ -64,7 +64,7 @@ def main():
 
    rank_subdir = '%05d_worfrank' % mpirank
    logger.info('making directory %s',rank_subdir)
-   workdir = os.path.join(workdir,rank_subdir)
+   workdir = os.path.join(options.workdir,rank_subdir)
    os.mkdir(rank_subdir)
 
    # logger.debug('config = %s',config)
@@ -111,7 +111,8 @@ def main():
 
          logger.info('%s exited with code %s',app_name,app.get_returncode())
          if app.get_returncode() != 0:
-            shutil.copytree(rank_subdir,options.workdir)
+            if options.stagedir is not None:
+               shutil.copytree(rank_subdir,options.stagedir)
             return -1
          # logger.info('stdout = %s\nstderr = %s',stdout,stderr)
 

@@ -298,6 +298,8 @@ class ReconstructTF(AthenaApplication):
       self.args['outputRDOFile'] = '%05d_recoRDO.pool.root' % MPI.COMM_WORLD.Get_rank()
       self.args['outputESDFile'] = '%05d_recoESD.pool.root' % MPI.COMM_WORLD.Get_rank()
 
+      self.tarballname = '%05d_reco.pool.root.tgz' % MPI.COMM_WORLD.Get_rank()
+
    def stage_files(self,stagedir):
       super(ReconstructTF,self).stage_files(stagedir)
       
@@ -308,39 +310,42 @@ class ReconstructTF(AthenaApplication):
          logger.info('handling non-merged outputs')
          srcfiles = []
          # glob all the RDO files
-         glob_str = os.path.join(self.rundir,'*/*/'+self.args['outputRDOFile'] + '*')
+         glob_str = self.rundir + '/athenaMP-workers-HITtoRDO-h2r/worker_*/' + self.args['outputRDOFile'] + '_*'
          srcfiles += glob.glob(glob_str)
          # glob all the ESD files
-         glob_str = os.path.join(self.rundir,'*/*/'+self.args['outputESDFile'] + '*')
+         glob_str = self.rundir + '/athenaMP-workers-RAWtoESD-r2e/worker_*/' + self.args['outputESDFile'] + '_*'
          srcfiles += glob.glob(glob_str)
          # what I've seen is that all the filenames are the same down inside the
          # worker directories so we cannot just copy them to the stage out directory
          # we have to rename them to include the worker number for uniqueness
          # we'll rename them in the run directory because if this is a node-local SSD
          # or RAM-disk, performance will be better.
-         newsrcfiles = []
+         logger.info('found %s source files',len(srcfiles))
+         tarball_filename = os.path.join(stagedir,self.tarballname)
+         tf = tarfile.open(tarball_filename,'w:gz')
          for filename in srcfiles:
             newfn = os.path.basename(filename) + '.' + self.get_worker_num(filename)
-            newfn = os.path.join(os.path.dirname(filename),newfn)
+            newfn = os.path.dirname(filename) + '/' + newfn
 
+            logger.debug('renaming %100s to %100s',filename,newfn)
             os.rename(filename,newfn)
 
-            newsrcfiles.append(newfn)
+            tf.add(newfn)
+         tf.close()
 
-         srcfiles = newsrcfiles
-         logger.info('%s files renamed',len(srcfiles))
+         srcfiles = []
+         logger.info('%s tarball created',tarball_filename)
 
 
          
-      logger.info('staging reco output files')
+      logger.info('staging %s reco output files',len(srcfiles))
       for srcfile in srcfiles:
-         dstfile = os.path.join(stagedir,('%05d_' % MPI.COMM_WORLD.Get_rank()) + srcfile)
+         dstfile = os.path.join(stagedir,('%05d_' % MPI.COMM_WORLD.Get_rank()) + os.path.basename(srcfile))
          
          if self.rundir is not None:
             srcfile = os.path.join(self.rundir,srcfile)
 
          shutil.copyfile(srcfile,dstfile)
-
 
    def get_output_filename(self):
       return None
