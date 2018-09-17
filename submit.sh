@@ -4,7 +4,7 @@
 #COBALT -q default
 #COBALT -A EnergyFEC_3
 
-module load miniconda-3.6/conda-4.4.10
+module load miniconda-3.6/conda-4.5.4
 
 ATLASWORF=/home/parton/git/atlasworf
 export PYTHONPATH=$ATLASWORF:$PYTHONPATH

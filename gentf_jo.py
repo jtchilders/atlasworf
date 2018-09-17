@@ -33,5 +33,9 @@ genSeq.Pythia8.Commands += [
 print('input_lhe_filename = %s' % input_lhe_filename)
 pythia8_i.LHEFile = input_lhe_filename
 
+from EvgenProdTools.EvgenProdToolsConf import TestHepMC
+pythia8_i += TestHepMC()
+pythia8_i.TestHepMC.EffFailThreshold = 0.5
+
 evgenConfig.minevents = minevents
 

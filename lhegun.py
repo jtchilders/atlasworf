@@ -18,6 +18,7 @@ def main():
    ap.add_argument('-b','--min-e',dest='min_e',type=float,default=100.,help='particles are generated within energy min_e and max_e: Units are GeV')
    ap.add_argument('-c','--max-e',dest='max_e',type=float,default=1000.,help='particles are generated within energy min_e and max_e: Units are GeV')
    ap.add_argument('-r','--numpy-seed',dest='numpy_seed',type=int,default=0,help='random number seed to start with')
+   ap.add_argument('-q','--quark-flavor',dest='quark_flavor',type=int,default=5,help='quark flavor in output, 5=bottom, 4=charm, 3=strange, 2=down, 1=up')
    args = ap.parse_args()
 
 
@@ -29,6 +30,7 @@ def main():
    logger.info('min_e:        %s',args.min_e)
    logger.info('max_e:        %s',args.max_e)
    logger.info('numpy_seed:   %s',args.numpy_seed)
+   logger.info('quark_flavor: %s',args.quark_flavor)
    
    numpy.random.seed(args.numpy_seed)
 
@@ -70,10 +72,10 @@ def main():
    <event>
      4  12345  1.00E+00  {p[3]:.8E} -1.00E+00  -1.00E-01
      21    -1     0     0   511   514  0.00E+00       0.00E+00  {p[3]:.8E}  {p[3]:.8E}  0.00E+00  0.00E+00  9.00E+00
-     5    -1      0     0   514   0    0.00E+00       0.00E+00  {q[3]:.8E}  {p[3]:.8E}  0.00E+00  0.00E+00  9.00E+00
-     5     1      1     2   511   0    {p[0]:.8E}  {p[1]:.8E}  {p[2]:.8E}  {p[3]:.8E}  0.00E+00  0.00E+00  9.00E+00
+     {quark_flavor}    -1      0     0   514   0    0.00E+00       0.00E+00  {q[3]:.8E}  {p[3]:.8E}  0.00E+00  0.00E+00  9.00E+00
+     {quark_flavor}     1      1     2   511   0    {p[0]:.8E}  {p[1]:.8E}  {p[2]:.8E}  {p[3]:.8E}  0.00E+00  0.00E+00  9.00E+00
      12     1     1     2   0     0    {q[0]:.8E}  {q[1]:.8E}  {q[2]:.8E}  {p[3]:.8E}  0.00E+00  0.00E+00  9.00E+00
-   </event>""".format(p=mom, q=amom)
+   </event>""".format(p=mom, q=amom,quark_flavor=args.quark_flavor)
             f.write(s + "\n")
          f.write("</LesHouchesEvents>\n")
 
